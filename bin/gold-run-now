@@ -1,0 +1,10 @@
+#!/bin/bash
+# gold-run-now - make today's gold trend report now (desktop icon "Gold Report - Run Now").
+# Runs the same systemd unit as nightly mode, so it can't run twice at once and a closed terminal can't kill it.
+if systemctl --user is-active --quiet gold-report.service; then
+    notify-send -a "Gold trend" "Gold report" "Already running - the pop-up will appear when it is done."
+    exit 0
+fi
+systemctl --user daemon-reload
+notify-send -a "Gold trend" -i x-office-spreadsheet "Gold report" "Downloading prices and fitting the trends..."
+systemctl --user start --no-block gold-report.service

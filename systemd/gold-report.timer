@@ -1,0 +1,11 @@
+[Unit]
+Description=Gold vs trend report, Mon-Fri 06:30 (uses the previous trading day's close)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 06:30:00
+# no LLM involved and it takes seconds: a run missed while the laptop was off is made at the next boot
+Persistent=true
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

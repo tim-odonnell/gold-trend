@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Gold Report - Manual Mode
+Comment=Stop automatic gold reports (Run Now still works)
+Exec=/home/user/.local/bin/gold-mode manual
+Icon=media-playback-pause
+Terminal=false
+Categories=Utility;

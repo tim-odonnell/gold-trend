@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""gold-trend - is gold above or below its trend today, and what price is "on trend" for the next trading day?
+
+Fits an exponential trend (straight line through log prices) to the last 1m/3m/6m/1y/5y/10y/20y of daily closes of
+COMEX gold futures (Yahoo Finance GC=F) and reports, per window, the gap to trend and the price the next trading day
+needs to be exactly on trend. Standard library only.
+
+  gold-trend [--json FILE] [--out DIR] [--now YYYY-MM-DDTHH:MM] [--notify]
+
+Drafted by a local Gemma E2B (structure: load -> calculate -> report), fixed by Claude.
+"""
+import argparse
+import csv
+import datetime
+import html
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+from zoneinfo import ZoneInfo
+
+NY = ZoneInfo('America/New_York')
+CLOSE_HOUR = 17          # COMEX day session is over by 17:00 New York time
+SOURCE = 'Yahoo Finance, COMEX gold futures GC=F (USD/oz, daily close)'
+URL = 'https://query1.finance.yahoo.com/v8/finance/chart/GC=F?period1=946684800&period2={now}&interval=1d'
+USER_AGENT = 'gold-trend/0.1 (personal research script)'
+WINDOWS = [('1 month', 30), ('3 months', 91), ('6 months', 182), ('1 year', 365),
+           ('5 years', 1826), ('10 years', 3652), ('20 years', 7305)]
+DISCLAIMER = 'Trend lines are fitted to past prices; they are not a forecast and not financial advice.'
+
+
+class DataError(Exception):
+    pass
+
+
+# --- Load and clean -------------------------------------------------------------------------------------------
+def fetch_json():
+    url = URL.format(now=int(time.time()))
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r)
+        except Exception as e:          # network, HTTP or JSON error - retry, then give up
+            last = e
+            time.sleep(5 * (attempt + 1))
+    raise DataError(f'download failed: {last}')
+
+
+def load_and_clean(data, now_ny):
+    """-> sorted [(date, close)] of finished sessions only."""
+    try:
+        res = data['chart']['result'][0]
+        stamps = res['timestamp']
+        closes = res['indicators']['quote'][0]['close']
+    except (KeyError, IndexError, TypeError) as e:
+        raise DataError(f'unexpected data layout ({e})')
+    by_date = {}
+    for ts, price in zip(stamps, closes):
+        if price is None or not isinstance(price, (int, float)) or price <= 0:
+            continue
+        by_date[datetime.datetime.fromtimestamp(ts, NY).date()] = float(price)
+    # today's bar is still moving until the session closes
+    if now_ny.hour < CLOSE_HOUR:
+        by_date.pop(now_ny.date(), None)
+    bars = sorted(by_date.items())
+    if len(bars) < 250:
+        raise DataError(f'only {len(bars)} daily prices - refusing to report from so little data')
+    if bars[-1][0] < now_ny.date() - datetime.timedelta(days=7):
+        raise DataError(f'newest price is from {bars[-1][0]} - data is stale')
+    return bars
+
+
+def next_trading_day(d):
+    n = d + datetime.timedelta(days=1)
+    while n.weekday() >= 5:
+        n += datetime.timedelta(days=1)
+    return n
+
+
+# --- Calculate ------------------------------------------------------------------------------------------------
+def fit_window(bars, last_date, last_price, days, next_day):
+    cutoff = last_date - datetime.timedelta(days=days)
+    win = [(d, p) for d, p in bars if d > cutoff]
+    d0 = win[0][0]
+    xs = [(d - d0).days for d, _ in win]
+    ys = [math.log(p) for _, p in win]
+    n = len(win)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    a = my - b * mx
+    ss_tot = sum((y - my) ** 2 for y in ys)
+    ss_res = sum((y - (a + b * x)) ** 2 for x, y in zip(xs, ys))
+    trend_today = math.exp(a + b * (last_date - d0).days)
+    return {
+        'trend_today': trend_today,
+        'gap_pct': (last_price / trend_today - 1) * 100,
+        'on_trend_next': math.exp(a + b * (next_day - d0).days),
+        'growth_pct': (math.exp(b * 365.25) - 1) * 100,
+        'r2': 1 - ss_res / ss_tot if ss_tot else 1.0,
+        'bars': n,
+        # history must reach back (almost) the whole window - a week of slack for holidays/weekends
+        'short': (d0 - cutoff).days > 7,
+    }
+
+
+# --- Report ---------------------------------------------------------------------------------------------------
+def money(v):
+    return f'${v:,.2f}'
+
+
+def build_reports(rows, last_date, last_price, next_day, made):
+    below = [r for r in rows if r['gap_pct'] < 0]
+    summary = (f'Gold closed at {money(last_price)} on {last_date:%a %b %d, %Y}: '
+               f'BELOW trend on {len(below)} of {len(rows)} windows'
+               + (f' ({", ".join(r["window"] for r in below)}).' if below else '.'))
+    md = [f'# Gold vs trend - {last_date:%Y-%m-%d}', '',
+          f'**{summary}**', '',
+          f'Next trading day: {next_day:%a %b %d, %Y}. Source: {SOURCE}. Made {made:%Y-%m-%d %H:%M %Z}.', '',
+          f'| Window | Trend today | Gap % | Above/Below | On-trend price for {next_day:%b %d} | Trend growth %/yr | R² | Bars |',
+          '|---|---:|---:|---|---:|---:|---:|---:|']
+    for r in rows:
+        md.append(f'| {r["window"]}{" (short history)" if r["short"] else ""} | {money(r["trend_today"])} | '
+                  f'{r["gap_pct"]:+.2f}% | {"BELOW" if r["gap_pct"] < 0 else "ABOVE"} | {money(r["on_trend_next"])} | '
+                  f'{r["growth_pct"]:+.2f}% | {r["r2"]:.2f} | {r["bars"]:,} |')
+    md += ['', 'How to read it: "On-trend price" is where the trend line for that window is on the next trading day. '
+           'A price under it is BELOW that trend (cheaper than the trend), over it is ABOVE. '
+           'R² near 1 = prices hugged the line; near 0 = no clear trend, so that row means little.', '', DISCLAIMER, '']
+
+    trs = []
+    for r in rows:
+        cls = 'below' if r['gap_pct'] < 0 else 'above'
+        trs.append(f'<tr><td>{html.escape(r["window"])}{" <small>(short history)</small>" if r["short"] else ""}</td>'
+                   f'<td>{money(r["trend_today"])}</td><td class="{cls}">{r["gap_pct"]:+.2f}%</td>'
+                   f'<td class="{cls}"><b>{cls.upper()}</b></td><td><b>{money(r["on_trend_next"])}</b></td>'
+                   f'<td>{r["growth_pct"]:+.2f}%</td><td>{r["r2"]:.2f}</td><td>{r["bars"]:,}</td></tr>')
+    page = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Gold vs trend {last_date}</title>
+<style>
+:root {{ --bg:#fff; --fg:#1d1d1f; --muted:#666; --line:#ddd; --head:#f4f4f4; --up:#0a7a32; --down:#c0262d; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --bg:#16171a; --fg:#e8e8ea; --muted:#9a9aa0; --line:#33343a;
+  --head:#22232a; --up:#4cc274; --down:#ff6b6b; }} }}
+body {{ background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; margin:0 auto; max-width:1000px; padding:16px; }}
+.summary {{ font-size:1.15em; font-weight:600; }} .muted, small {{ color:var(--muted); }}
+.wrap {{ overflow-x:auto; }} table {{ border-collapse:collapse; width:100%; margin:12px 0; }}
+th, td {{ border-bottom:1px solid var(--line); padding:6px 10px; text-align:right; white-space:nowrap; }}
+th {{ background:var(--head); }} th:first-child, td:first-child, td:nth-child(4) {{ text-align:left; }}
+.above {{ color:var(--up); }} .below {{ color:var(--down); }}
+</style></head><body>
+<h1>Gold vs trend - {last_date:%Y-%m-%d}</h1>
+<p class="summary">{html.escape(summary)}</p>
+<p class="muted">Next trading day: {next_day:%a %b %d, %Y}. Source: {html.escape(SOURCE)}. Made {made:%Y-%m-%d %H:%M %Z}.</p>
+<div class="wrap"><table><thead><tr><th>Window</th><th>Trend today</th><th>Gap</th><th>Above/Below</th>
+<th>On-trend price for {next_day:%b %d}</th><th>Trend growth/yr</th><th>R²</th><th>Bars</th></tr></thead>
+<tbody>{"".join(trs)}</tbody></table></div>
+<p class="muted">How to read it: "On-trend price" is where the trend line for that window is on the next trading day.
+A price under it is BELOW that trend (cheaper than the trend), over it is ABOVE. R² near 1 = prices hugged the line;
+near 0 = no clear trend, so that row means little.</p>
+<p><i>{DISCLAIMER}</i></p></body></html>
+'''
+    return '\n'.join(md), page, summary
+
+
+def notify(title, body, report=None, urgent=False):
+    """Desktop pop-up. With a report, it offers 'Open report' and waits for the click in its own unit."""
+    if not shutil.which('notify-send'):
+        return
+    if report and shutil.which('systemd-run') and shutil.which('gold-notify'):
+        subprocess.run(['systemd-run', '--user', '--collect', '--quiet', 'gold-notify', title, body, report])
+    else:
+        subprocess.run(['notify-send', '-a', 'Gold trend'] + (['-u', 'critical'] if urgent else [])
+                       + ['-i', 'x-office-spreadsheet', title, body])
+
+
+def main():
+    ap = argparse.ArgumentParser(description='Gold price vs its 1m-20y trends')
+    ap.add_argument('--json', help='read Yahoo chart JSON from this file instead of downloading')
+    ap.add_argument('--out', default=os.path.expanduser('~/Gold-Reports'), help='report folder (default ~/Gold-Reports)')
+    ap.add_argument('--now', help='pretend the New York time is YYYY-MM-DDTHH:MM (testing)')
+    ap.add_argument('--notify', action='store_true', help='show a desktop notification when done')
+    args = ap.parse_args()
+    out = os.path.expanduser(args.out)
+    try:
+        now = (datetime.datetime.strptime(args.now, '%Y-%m-%dT%H:%M').replace(tzinfo=NY) if args.now
+               else datetime.datetime.now(NY))
+        if args.json:
+            with open(args.json) as f:
+                data = json.load(f)
+        else:
+            data = fetch_json()
+        bars = load_and_clean(data, now)
+        last_date, last_price = bars[-1]
+        nxt = next_trading_day(last_date)
+        rows = [dict(window=name, **fit_window(bars, last_date, last_price, days, nxt)) for name, days in WINDOWS]
+        md, page, summary = build_reports(rows, last_date, last_price, nxt, datetime.datetime.now().astimezone())
+    except (DataError, OSError, ValueError, json.JSONDecodeError) as e:
+        print(f'gold-trend: {e}', file=sys.stderr)
+        if args.notify:
+            notify('Gold report failed', str(e), urgent=True)
+        sys.exit(1)
+
+    os.makedirs(os.path.join(out, 'data'), exist_ok=True)
+    with open(os.path.join(out, 'data', 'gold-daily.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['date', 'close'])
+        w.writerows((d.isoformat(), f'{p:.2f}') for d, p in bars)
+    md_path, html_path = os.path.join(out, f'{last_date}.md'), os.path.join(out, f'{last_date}.html')
+    with open(md_path, 'w') as f:
+        f.write(md)
+    with open(html_path, 'w') as f:
+        f.write(page)
+    shutil.copyfile(html_path, os.path.join(out, 'latest.html'))
+    print(md)
+    print(f'\nWritten: {md_path}, {html_path}, {os.path.join(out, "latest.html")}')
+    if args.notify:
+        notify(f'Gold vs trend - {last_date:%b %d}', summary, html_path)
+
+
+if __name__ == '__main__':
+    main()

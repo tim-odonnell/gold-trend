@@ -115,6 +115,32 @@ def money(v):
     return f'${v:,.2f}'
 
 
+def visual_html(rows):
+    """Dots line + centre-line gap bars (plain divs). Written by gpt-oss-20b, wired in by Claude."""
+    total = len(rows)
+    below = sum(1 for r in rows if r['gap_pct'] < 0)
+    # dots line
+    dots = ''.join('<span class="dot below">●</span>' if r['gap_pct'] < 0 else '<span class="dot above">○</span>' for r in rows)
+    style = '''\n<style>\n.visual {font-size:1rem;overflow-x:auto;margin:8px 0 16px;}\n.visual .dots {margin-bottom:0.5em;}\n.visual .dots .dot {margin-right:2px;font-size:1.5em;}\n.visual .dots .below {color:var(--down);}\n.visual .dots .above {color:var(--up);}\n.visual .bar-row {display:flex;align-items:center;margin:4px 0;}\n.visual .bar-row .label {width:90px;flex-shrink:0;font-weight:600;}\n.visual .bar-area {width:300px;height:14px;display:flex;position:relative;flex-shrink:0;}\n.visual .bar-area::before{content:"";position:absolute;left:50%;top:0;width:1px;background:var(--muted);height:100%;} \n.visual .bar-area .left {flex:0 0 150px;display:flex;justify-content:flex-end;border-right:2px solid var(--fg);}\n.visual .bar-area .right {flex:0 0 150px;display:flex;justify-content:flex-start;}\n.visual .bar-area .bar {height:100%;} \n.visual .bar-area .bar.red {background:var(--down);} \n.visual .bar-area .bar.green {background:var(--up);} \n.visual .gap {margin-left:8px;width:4.5em;text-align:right;}\n.visual .scale {display:flex;margin-left:90px;width:302px;font-size:0.8em;color:var(--muted);}\n.visual .scale span {flex:1;}\n.visual .scale span + span {text-align:right;} \n.visual .weak {margin-left:8px;color:var(--muted);font-size:0.8em;}\n</style>'''
+    bar_lines = []
+    for r in rows:
+        win = html.escape(r['window'])
+        gap_pct = r['gap_pct']
+        r2 = r['r2']
+        width = min(abs(gap_pct),20)/20*150
+        left_style = f'width:{width:.1f}px' if gap_pct < 0 else 'width:0px'
+        right_style = f'width:{width:.1f}px' if gap_pct >= 0 else 'width:0px'
+        weak = r2 < 0.5
+        weak_span = '<small class="weak">(weak trend)</small>' if weak else ''
+        line = (f'<div class="bar-row" style="opacity:{0.4 if weak else 1}"><span class="label">{win}</span>'
+                f'<div class="bar-area"><div class="left"><div class="bar red" style="{left_style}"></div></div>'
+                f'<div class="right"><div class="bar green" style="{right_style}"></div></div></div>'
+                f'<span class="gap">{gap_pct:+.2f}%</span>{weak_span}</div>')
+        bar_lines.append(line)
+    bars_html = '<div class="bars">' + ''.join(bar_lines) + '<div class="scale"><span>&#9664; cheaper than trend</span><span>pricier than trend &#9654;</span></div></div>'
+    return style + '<div class="visual"><div class="dots">' + dots + f' Below trend on {below} of {total}</div>' + bars_html + '</div>'
+
+
 def build_reports(rows, last_date, last_price, next_day, made):
     below = [r for r in rows if r['gap_pct'] < 0]
     summary = (f'Gold closed at {money(last_price)} on {last_date:%a %b %d, %Y}: '
@@ -155,6 +181,7 @@ th {{ background:var(--head); }} th:first-child, td:first-child, td:nth-child(4)
 </style></head><body>
 <h1>Gold vs trend - {last_date:%Y-%m-%d}</h1>
 <p class="summary">{html.escape(summary)}</p>
+{visual_html(rows)}
 <p class="muted">Next trading day: {next_day:%a %b %d, %Y}. Source: {html.escape(SOURCE)}. Made {made:%Y-%m-%d %H:%M %Z}.</p>
 <div class="wrap"><table><thead><tr><th>Window</th><th>Trend today</th><th>Gap</th><th>Above/Below</th>
 <th>On-trend price for {next_day:%b %d}</th><th>Trend growth/yr</th><th>R²</th><th>Bars</th></tr></thead>

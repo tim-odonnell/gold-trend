@@ -7,6 +7,8 @@ and what price the **next trading day** would need to be exactly on each trend.
   longer publish gold). Today's bar is ignored until 17:00 New York time (session not finished).
 - Trend: least-squares line through the **log** of the closes in each window (= exponential trend), extended to the
   next trading day. R² shows how well prices followed the line - near 0 means that window has no real trend.
+- Chart: under the dots and bars, the last 5 years of price with every trend line drawn faintly behind it (`bin/trend_overlay.py`,
+  written by a local Gemma E2B in 9 guided steps and checked against a reference - see ~/e2b-abilities task 6b). On phones it opens at today; swipe for earlier years.
 - Output: `~/Gold-Reports/<last close date>.html` + `.md`, `latest.html`, `data/gold-daily.csv`; desktop pop-up with
   "Open report". Takes ~1 s; no AI model involved (numbers are computed, never written by a model).
 

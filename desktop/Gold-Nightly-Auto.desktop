@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Gold Report - Nightly Auto
-Comment=Make the gold report automatically every weekday at 06
-Exec=/home/user/.local/bin/30
-Icon=gold-mode nightly:appointment-soon
+Comment=Make the gold report automatically every weekday at 06:30
+Exec=/home/user/.local/bin/gold-mode nightly
+Icon=appointment-soon
 Terminal=false
 Categories=Utility;

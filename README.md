@@ -24,3 +24,11 @@ and what price the **next trading day** would need to be exactly on each trend.
 
 Install: `./install.sh`. Trend lines are fitted to past prices; they are not a forecast and not financial advice.
 Drafted by a local Gemma E2B, fixed and finished by Claude.
+
+## License
+
+**The Median Line License (draft)** — free to use until your income exceeds the
+median household income of the ZIP code you live in; above that line you
+contribute a small share of what the software helped you earn, never enough to
+pull you back below the line. Trust-based: no reporting, no audits. See
+[LICENSE](LICENSE) and [the license project](https://github.com/tim-odonnell/median-line-license).

@@ -15,7 +15,7 @@ case "${1:-}" in
         systemctl --user enable --now gold-report.timer
         echo nightly > "$MODE_FILE"
         next=$(systemctl --user show gold-report.timer -p NextElapseUSecRealtime --value)
-        notify-send -a "Gold trend" -i appointment-soon "Gold report: NIGHTLY mode" "Runs automatically Mon-Fri at 02:10. Next: ${next:-?}"
+        notify-send -a "Gold trend" -i appointment-soon "Gold report: NIGHTLY mode" "Runs automatically Tue-Sat at 02:10. Next: ${next:-?}"
         ;;
     status)
         echo "Mode: $(cat "$MODE_FILE" 2>/dev/null || echo 'not set (manual)')"

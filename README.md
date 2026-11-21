@@ -17,7 +17,7 @@ and what price the **next trading day** would need to be exactly on each trend.
 | Command / icon | What it does |
 |---|---|
 | `gold-run-now` / **Gold Report - Run Now** | make the report now |
-| `gold-mode nightly` / **Gold Report - Nightly Auto** | run automatically Mon-Fri 02:10 (a missed run is made at next boot) |
+| `gold-mode nightly` / **Gold Report - Nightly Auto** | run automatically Tue-Sat 02:10 (a missed run is made at next boot) |
 | `gold-mode manual` / **Gold Report - Manual Mode** | no automatic runs (the default after install) |
 | `gold-mode status` | mode, next run, last run, newest report |
 | `gold-trend --json FILE --now 2026-11-18T10:00 --out DIR` | offline test run |

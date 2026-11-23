@@ -101,8 +101,9 @@ def box_html(r):
     online = f' Costco.com: {html.escape(r["online"])}.' if r.get('online') else ''
     return f'''<style>
 .cgbox {{ border:2px solid var(--avg); border-radius:8px; padding:10px 14px; margin:12px 0 16px; }}
-.cgbox h2 {{ font-size:1.05em; margin:0 0 6px; }} .cgbox table {{ width:auto; margin:4px 0 8px; }}
-.cgbox td {{ border:none; padding:2px 14px 2px 0; text-align:right; }} .cgbox td:first-child {{ text-align:left; }}
+.cgbox h2 {{ font-size:1.05em; margin:0 0 6px; }} .cgbox table {{ width:auto; max-width:100%; margin:4px 0 8px; }}
+.cgbox td {{ border:none; padding:2px 0 2px 12px; text-align:right; white-space:nowrap; vertical-align:top; }}
+.cgbox td:first-child {{ text-align:left; white-space:normal; padding-left:0; }}  /* labels wrap on phones, prices never do */
 .cgbox .cg-buy {{ background:var(--up); color:var(--bg); font-weight:800; padding:6px 10px; border-radius:6px; }}
 .cgbox .cg-wait {{ font-weight:700; color:var(--down); }} .cgbox p {{ font-size:.85em; margin:6px 0 0; }}
 </style>

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""costco-gold - is Costco's 1 oz gold bar, after 2% card cash back, at or below gold's all-history trend today?
+
+Reads Costco's in-store price of the 1 oz PAMP Suisse Lady Fortuna bar from costcogoldinventory.com (an unofficial
+tracker: Costco shows gold prices to signed-in members only). If that fails, it estimates the price from the newest
+gold close + Costco's typical markup and says so. The trend is the same all-history log-linear fit gold-trend uses,
+from ~/Gold-Reports/data/gold-daily.csv, evaluated at today's date. Standard library only.
+
+Writes ~/Gold-Reports/costco-latest.json, costco-box.html (a fragment daily-pages puts in the gold section) and
+appends a row to data/costco-history.csv.
+
+  costco-gold [--out DIR] [--html FILE] [--date YYYY-MM-DD]
+"""
+import argparse
+import csv
+import datetime
+import html
+import json
+import math
+import os
+import re
+import sys
+import time
+import urllib.request
+from zoneinfo import ZoneInfo
+
+NY = ZoneInfo('America/New_York')
+TRACKER = 'https://costcogoldinventory.com/costco-gold'
+TRACKER_NAME = 'costcogoldinventory.com'
+USER_AGENT = 'costco-gold/0.1 (personal daily report; github.com/tim-odonnell/gold-trend)'
+CASHBACK = 0.02          # the user's credit card: 2% back
+EST_MARKUP = 0.035       # typical Costco premium over COMEX gold (tracker shows ~2-4%); used only for the estimate
+BAR = '1 oz PAMP Suisse Lady Fortuna gold bar'
+
+
+def money(v):
+    return f'${v:,.2f}'
+
+
+def fetch_tracker():
+    """-> dict(price, established, checked, online, spot) or raises."""
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(TRACKER, headers={'User-Agent': USER_AGENT})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                page = r.read().decode('utf-8', 'replace')
+            break
+        except Exception as e:
+            last = e
+            time.sleep(10 * (attempt + 1))
+    else:
+        raise RuntimeError(f'tracker download failed: {last}')
+    text = re.sub(r'<script.*?</script>|<style.*?</style>', ' ', page, flags=re.S)
+    text = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', text)))
+    m = re.search(r"in-store price for the 1 oz PAMP Suisse Lady Fortuna gold bar is \$([\d,]+\.\d\d)"
+                  r"(?: \(price established ([^)]{5,40})\))?", text)
+    if not m:
+        raise RuntimeError('tracker page layout changed (in-store price sentence not found)')
+    out = dict(price=float(m.group(1).replace(',', '')), established=m.group(2))
+    c = re.search(r'As of ([A-Z][a-z]{2} \d{1,2}, \d{4} · [\d:]+ [AP]M ET)', text)
+    out['checked'] = c.group(1) if c else None
+    o = re.search(r'On Costco\.com the bar is ([^.]{3,80}?\$[\d,]+\.\d\d|[a-z ]{3,30})', text)
+    out['online'] = o.group(1).strip() if o else None
+    s = re.search(r'Gold spot is \$([\d,]+\.\d\d)/oz', text)
+    out['spot'] = float(s.group(1).replace(',', '')) if s else None
+    return out
+
+
+def load_gold(csv_path):
+    with open(csv_path) as f:
+        rows = [(datetime.date.fromisoformat(r['date']), float(r['close'])) for r in csv.DictReader(f)]
+    if len(rows) < 250:
+        raise RuntimeError(f'only {len(rows)} gold prices in {csv_path}')
+    return rows
+
+
+def allhistory_trend(bars, day):
+    """Same fit as gold-trend's all-history row: least squares line through log(close) vs days."""
+    d0 = bars[0][0]
+    xs = [(d - d0).days for d, _ in bars]
+    ys = [math.log(p) for _, p in bars]
+    n = len(bars)
+    mx, my = sum(xs) / n, sum(ys) / n
+    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+    a = my - b * mx
+    return math.exp(a + b * (day - d0).days)
+
+
+def box_html(r):
+    buy = r['buy']
+    status = ('<div class="cg-buy">BUY DAY: the Costco bar after 2% cash back is at or below the all-history trend</div>'
+              if buy else
+              f'<div class="cg-wait">Not a buy day: {abs(r["gap_pct"]):.1f}% above the all-history trend</div>')
+    src = (f'In-store price recorded by {TRACKER_NAME} (unofficial tracker)'
+           + (f', price set {html.escape(r["established"])}' if r.get('established') else '')
+           + (f'; checked {html.escape(r["checked"])}' if r.get('checked') else '') + '.'
+           if r['source'] == 'tracker' else
+           f'<b>ESTIMATE</b> - the tracker could not be read ({html.escape(r["error"])}). Newest gold close '
+           f'{money(r["gold_close"])} ({r["gold_date"]:%b %d}) + Costco\'s typical {EST_MARKUP * 100:.1f}% markup.')
+    online = f' Costco.com: {html.escape(r["online"])}.' if r.get('online') else ''
+    return f'''<style>
+.cgbox {{ border:2px solid var(--avg); border-radius:8px; padding:10px 14px; margin:12px 0 16px; }}
+.cgbox h2 {{ font-size:1.05em; margin:0 0 6px; }} .cgbox table {{ width:auto; margin:4px 0 8px; }}
+.cgbox td {{ border:none; padding:2px 14px 2px 0; text-align:right; }} .cgbox td:first-child {{ text-align:left; }}
+.cgbox .cg-buy {{ background:var(--up); color:var(--bg); font-weight:800; padding:6px 10px; border-radius:6px; }}
+.cgbox .cg-wait {{ font-weight:700; color:var(--down); }} .cgbox p {{ font-size:.85em; margin:6px 0 0; }}
+</style>
+<div class="cgbox"><h2>Costco 1 oz gold bar vs the all-history trend - {r["day"]:%a %b %d}</h2>
+{status}
+<table>
+<tr><td>Costco in-store price{" (estimate)" if r["source"] != "tracker" else ""}</td><td>{money(r["price"])}</td></tr>
+<tr><td>After 2% card cash back</td><td><b>{money(r["effective"])}</b></td></tr>
+<tr><td class="avgtxt">All-history trend for {r["day"]:%b %d}</td><td class="avgtxt"><b>{money(r["trend"])}</b></td></tr>
+<tr><td>Buy if the shelf price is at or below</td><td><b>{money(r["max_shelf"])}</b></td></tr>
+</table>
+<p class="muted">{src}{online} Costco can change the price during the day, so check the shelf: buy only at
+{money(r["max_shelf"])} or less. No sales tax assumed (bullion-exempt state). Not financial advice.</p></div>
+'''
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Costco gold bar (after 2% cash back) vs gold's all-history trend")
+    ap.add_argument('--out', default=os.path.expanduser('~/Gold-Reports'))
+    ap.add_argument('--html', help='write the box here (default OUT/costco-box.html)')
+    ap.add_argument('--date', help='trend date (default today, New York)')
+    a = ap.parse_args()
+    out = os.path.expanduser(a.out)
+    day = datetime.date.fromisoformat(a.date) if a.date else datetime.datetime.now(NY).date()
+    bars = load_gold(os.path.join(out, 'data', 'gold-daily.csv'))
+    trend = allhistory_trend(bars, day)
+    gold_date, gold_close = bars[-1]
+    r = dict(day=day, trend=trend, gold_date=gold_date, gold_close=gold_close, bar=BAR, cashback=CASHBACK)
+    try:
+        t = fetch_tracker()
+        if not 0.9 * gold_close < t['price'] < 1.4 * gold_close:   # misread or wrong item: don't trust it
+            raise RuntimeError(f'tracker price {money(t["price"])} is implausible next to gold at {money(gold_close)}')
+        r.update(t, source='tracker')
+    except Exception as e:
+        r.update(price=round(gold_close * (1 + EST_MARKUP), 2), source='estimate', error=str(e)[:160])
+        print(f'costco-gold: {e} - using an estimate', file=sys.stderr)
+    r['effective'] = r['price'] * (1 - CASHBACK)
+    r['gap_pct'] = (r['effective'] / trend - 1) * 100
+    r['buy'] = r['effective'] <= trend
+    r['max_shelf'] = math.floor(trend / (1 - CASHBACK) * 100) / 100
+    r['made'] = datetime.datetime.now().astimezone().isoformat(timespec='seconds')
+
+    os.makedirs(os.path.join(out, 'data'), exist_ok=True)
+    with open(a.html or os.path.join(out, 'costco-box.html'), 'w') as f:
+        f.write(box_html(r))
+    with open(os.path.join(out, 'costco-latest.json'), 'w') as f:
+        json.dump(r, f, indent=1, default=str)
+    hist = os.path.join(out, 'data', 'costco-history.csv')
+    new = not os.path.exists(hist)
+    with open(hist, 'a', newline='') as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(['made', 'day', 'source', 'price', 'established', 'effective', 'trend', 'gap_pct', 'buy'])
+        w.writerow([r['made'], day, r['source'], f'{r["price"]:.2f}', r.get('established') or '',
+                    f'{r["effective"]:.2f}', f'{trend:.2f}', f'{r["gap_pct"]:.2f}', int(r['buy'])])
+    print(f'{day}: Costco {money(r["price"])} ({r["source"]}), after cash back {money(r["effective"])}, '
+          f'all-history trend {money(trend)}, {r["gap_pct"]:+.1f}% -> {"BUY DAY" if r["buy"] else "wait"}; '
+          f'buy at shelf <= {money(r["max_shelf"])}')
+
+
+if __name__ == '__main__':
+    main()

@@ -4,7 +4,7 @@ set -eu
 REPO="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p ~/.local/bin ~/.config/systemd/user
 chmod +x "$REPO"/bin/*
-for f in gold-trend gold-mode gold-run-now gold-notify; do ln -sfn "$REPO/bin/$f" ~/.local/bin/$f; done
+for f in gold-trend gold-mode gold-run-now gold-notify costco-gold; do ln -sfn "$REPO/bin/$f" ~/.local/bin/$f; done
 cp "$REPO"/systemd/gold-report.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
 # Icons go in the Desktop folder good-guy-daily with the other report shortcuts (run-folder-launcher runs them there)

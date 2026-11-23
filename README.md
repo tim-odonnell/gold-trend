@@ -13,6 +13,11 @@ and what price the **next trading day** would need to be exactly on each trend.
   history, refitted every night - how far the price is above or below its long-run path.
 - Output: `~/Gold-Reports/<last close date>.html` + `.md`, `latest.html`, `data/gold-daily.csv`; desktop pop-up with
   "Open report". Takes ~1 s; no AI model involved (numbers are computed, never written by a model).
+- `costco-gold` (run daily by daily-pages, every day): Costco's in-store price of the 1 oz PAMP Lady Fortuna bar from
+  costcogoldinventory.com (unofficial tracker; Costco shows gold prices to members only), minus 2% card cash back, vs the
+  all-history trend at today's date (same fit, from `data/gold-daily.csv`). At or below -> BUY DAY. If the tracker fails:
+  an ESTIMATE (newest close + 3.5%), labelled. Writes `~/Gold-Reports/costco-box.html`, `costco-latest.json`,
+  `data/costco-history.csv`. No sales tax assumed.
 
 | Command / icon | What it does |
 |---|---|
